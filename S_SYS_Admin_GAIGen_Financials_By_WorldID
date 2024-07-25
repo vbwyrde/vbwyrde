@@ -1,0 +1,134 @@
+ 
+CREATE PROCEDURE [dbo].[S_SYS_Admin_GAIGen_Financials_By_WorldID]
+  @WorldID int 
+
+AS 
+
+/*
+====================================================================================
+USAGE:
+
+  EXEC S_SYS_Admin_GAIGen_Financials_By_WorldID 3362
+
+====================================================================================
+*/
+
+DROP TABLE IF EXISTS #GlobalConfig
+DROP TABLE IF EXISTS #PlanDetails 
+DROP TABLE IF EXISTS #FinalCalculations
+DROP TABLE IF EXISTS #Calculations
+
+SELECT * INTO #GlobalConfig from REF_GAI_GlobalConfig
+
+SELECT 
+    sp.ID,
+    sp.[Name],
+    spd.MonthlyFee,
+    spd.MarkUpMultiplier,
+    spd.GMImagePercent,
+    spd.PlayerImagePercent
+INTO #PlanDetails
+FROM REF_SubscriptionPlan sp
+JOIN XRF_SubscriptionPlanDetails spd ON sp.ID = spd.SubscriptionPlanID
+
+---------------------------------------------------------------------------------------------------- 
+-- WE NEED TO GET THE GM FROM THE WORLD AND FIND OUT WHAT THEIR PLAYER SUBSCRIPTION LEVEL IS
+-- AND WHAT THE GM HAS SET AS THEIR GM PLAYER IMAGE PERCENT IS.
+----------------------------------------------------------------------------------------------------
+
+DECLARE @GM_PlayerID int 
+SET @GM_PlayerID = (SELECT w.GM_PlayerID from REF_World W WHERE ID = @WorldID)
+
+SELECT 
+    pd.ID AS PlanID 
+   ,pd.[Name] AS PlanName
+   ,CASE WHEN  pd.ID = 1 THEN 500
+         WHEN  pd.ID = 2 THEN 100
+         WHEN  pd.ID = 3 THEN 10
+    END                                                        AS NumberOf
+   ,pd.MonthlyFee 
+   ,pd.MonthlyFee * 12                                         AS YearlyFee 
+   ,pd.GMImagePercent                                            
+   ,pd.MarkUpMultiplier                                        
+   ,gc_steps.ConfigValue                                       AS FWSteps 
+   ,gc_cost.ConfigValue                                        AS FWBaseCostPerStep 
+   ,gc_players.ConfigValue                                     AS EstPlayersPerGM 
+   ,gc_usage.ConfigValue                                       AS ImagesUsagePercent 
+   ,gc_tax.ConfigValue                                         AS TaxPercent 
+   ,gc_steps.ConfigValue * gc_cost.ConfigValue                 AS BaseCostPerImage
+   ,(SELECT P.GAI_GMPlayerImgPercent 
+     FROM REF_Player P 
+	 WHERE ID = @GM_PlayerID)                                  AS PlayerImagePercent
+   ,CASE WHEN pd.MonthlyFee > 0 THEN FLOOR(pd.MonthlyFee / (gc_steps.ConfigValue * gc_cost.ConfigValue))
+         ELSE 0
+    END                                                        AS TotalImagesPerMonth_GM
+   ,CASE WHEN pd.MonthlyFee > 0 THEN FLOOR(pd.MonthlyFee / (gc_steps.ConfigValue * gc_cost.ConfigValue)) * 12
+         ELSE 0
+    END                                                        AS TotalImagesPerYear_GM
+INTO #Calculations
+FROM #PlanDetails pd
+CROSS JOIN #GlobalConfig gc_steps
+CROSS JOIN #GlobalConfig gc_cost
+CROSS JOIN #GlobalConfig gc_players
+CROSS JOIN #GlobalConfig gc_usage
+CROSS JOIN #GlobalConfig gc_tax
+CROSS JOIN #GlobalConfig gc_PlayerImagePercent
+ 
+WHERE gc_steps.[Name] = 'Quality Steps'
+  AND gc_cost.[Name] = 'FW Base cost per Step'
+  AND gc_players.[Name] = 'Est Players Per GM'
+  AND gc_usage.[Name] = 'Images Usage Percent'
+  AND gc_tax.[Name] = 'Sales Tax Percent'
+  AND gc_PlayerImagePercent.[Name] = 'Default Player Image Percent'
+  
+SELECT 
+    PlanID
+  , PlanName
+  , NumberOf
+  , MonthlyFee
+  , YearlyFee
+  , GMImagePercent
+  , PlayerImagePercent
+  , FWSteps
+  , FWBaseCostPerStep
+  , EstPlayersPerGM
+  , ImagesUsagePercent
+  , TaxPercent
+  , TotalImagesPerMonth_GM
+  , TotalImagesPerMonth_GM  * GMImagePercent                                            AS ExpectedImagesPerMonth_GM
+  , TotalImagesPerYear_GM                                                               AS TotalImagesPerYear_GM
+  , TotalImagesPerYear_GM   * GMImagePercent                                            AS ExpectedImagesPerYear_GM
+  , (TotalImagesPerMonth_GM * GMImagePercent) * PlayerImagePercent                      AS TotalPlayerImagesPerMonth
+  , (TotalImagesPerYear_GM  * GMImagePercent) * PlayerImagePercent                      AS TotalPlayerImagesPerYear
+  , (TotalImagesPerMonth_GM * GMImagePercent) * PlayerImagePercent / EstPlayersPerGM    AS TotalPlayerImagesPerPlayerPerMonth
+  , (TotalImagesPerYear_GM  * GMImagePercent) * PlayerImagePercent / EstPlayersPerGM    AS TotalPlayerImagesPerPlayerPerYear
+  , (TotalImagesPerMonth_GM  * GMImagePercent) - 
+    ((TotalImagesPerMonth_GM * GMImagePercent) * PlayerImagePercent )                   AS GMImagesRemainingWithPlayerUsePerMonth
+  , (TotalImagesPerYear_GM  * GMImagePercent) - 
+    ((TotalImagesPerYear_GM * GMImagePercent)  * PlayerImagePercent )                   AS GMImagesRemainingWithPlayerUsePerYear
+  , (TotalImagesPerMonth_GM  * GMImagePercent) * NumberOf                               AS TotalNumberImagesPerMonth
+  , (TotalImagesPerYear_GM  * GMImagePercent)  * NumberOf                               AS TotalNumberImagesPerYear
+  , FWBaseCostPerStep * FWSteps * TotalImagesPerMonth_GM * GMImagePercent               AS FWCostToElthosForImagesPerGMPerMonth
+  , FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM  * GMImagePercent               AS FWCostToElthosForImagesPerGMPerYear
+  , FWBaseCostPerStep * FWSteps * TotalImagesPerMonth_GM * GMImagePercent * NumberOf    AS FWCostToElthosForImagesPerMonth
+  , FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM  * GMImagePercent * NumberOf    AS FWCostToElthosForImagesPerYear
+  , NumberOf * MonthlyFee                                                               AS MMSubscriptionIncomeForAllGMsPerMonth
+  , NumberOf * YearlyFee                                                                AS MMSubscriptionIncomeForAllGMsPerYear
+  , (NumberOf * MonthlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerMonth_GM * GMImagePercent * NumberOf)                                     AS GrossProfitBeforeTax_PerMonth
+  , (NumberOf * YearlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM * GMImagePercent * NumberOf)                                       AS GrossProfitBeforeTax_PerYear
+  , cast(((NumberOf * MonthlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerMonth_GM * GMImagePercent * NumberOf))
+   -(((NumberOf * MonthlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerMonth_GM * GMImagePercent * NumberOf)) * TaxPercent) as decimal(10,2))  AS ProfitAfterTax_PerMonth
+  , cast(((NumberOf * YearlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM * GMImagePercent * NumberOf))                   
+   -(((NumberOf * YearlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM * GMImagePercent * NumberOf))   * TaxPercent) as decimal(10,2))  AS ProfitAfterTax_PerYear
+INTO #FinalCalculations
+FROM #Calculations
+
+
+
+If @PlanID = 0 
+  SELECT * FROM #FinalCalculations
+Else
+  SELECT * FROM #FinalCalculations
+  WHERE PlanID = @PlanID
+
+   
