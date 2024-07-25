@@ -1,0 +1,289 @@
+ALTER PROCEDURE [dbo].[S_SYS_GAIGen_DetailedWorldUsage_WorldID_PlayerID]
+    @WorldID INT,
+    @PlayerID INT
+AS
+
+/*
+=============================================================================
+USAGE
+  
+  EXEC S_SYS_GAIGen_DetailedWorldUsage_WorldID_PlayerID 3362, 1
+
+=============================================================================
+SUPPORT QUERIES:
+
+  SELECT 
+      p.ID AS GM_ID,
+      p.Name AS GM_Name,
+      w.Name as 'W_Name',
+      w.id   as 'WID',
+      p.SubscriptionLevel
+  FROM 
+      REF_Player p
+  INNER JOIN 
+      REF_World w ON p.ID = w.GM_PlayerID
+  WHERE 
+      p.SubscriptionLevel = 4
+
+  SELECT * FROM REF_Player WHERE Name LIKE '%Blades%'
+ 
+  EXEC S_SYS_Admin_GAIGen_Financials 0 
+
+
+
+=============================================================================
+NOTES: 
+
+  Dim SubscriptionPlanID As Int16
+
+  '==================================
+  '    Public Enum SubscriptionLevel
+  '        Suspended = -1
+  '        None = 0
+  '        Player = 1
+  '        GM_MP = 2
+  '        GM_Basic = 3
+  '        GM_Premium = 4
+  '        GM_Beta = 5
+  '        GM_GameLord = 12
+  '    End Enum
+  '==================================
+
+  Select Case Player.SubscriptionLevel
+      Case 1, 2
+          SubscriptionPlanID = 1
+      Case 3
+          SubscriptionPlanID = 2
+      Case Is > 3
+          SubscriptionPlanID = 3
+  End Select
+
+=============================================================================
+     DECLARE @WorldID  INT = 1
+     DECLARE @PlayerID INT = 152
+=============================================================================
+*/ 
+BEGIN
+    DECLARE @SubscriptionPlanID    integer
+    DECLARE @SubscriptionPlanID_GM integer
+    DECLARE @IsWorldGM             bit      -- 0 = IS A PLAYER, 1 IS THE GM
+    
+    -- WE HAVE TO CHECK TO SEE IF THE PLAYER IS THE GM OF THE WORLD OR NOT
+    SET @IsWorldGM = (SELECT CASE WHEN @PlayerID = GM_PlayerID THEN 1 ELSE 0 END
+                        FROM REF_World WHERE ID = @WorldID)
+    
+    PRINT '@IsWorldGM: '+ CAST(@IsWorldGM AS VARCHAR(10))
+
+    IF @IsWorldGM = 1
+       BEGIN
+         -- THE PLAYER IS THE GM
+         SET @SubscriptionPlanID = (
+            SELECT
+                   CASE WHEN SubscriptionLevel = 1  THEN 1 
+                        WHEN SubscriptionLevel = 2  THEN 1 
+                        WHEN SubscriptionLevel = 3  THEN 2 
+                        WHEN SubscriptionLevel > 3  THEN 3 
+                        ELSE 1
+                  END
+            FROM REF_Player
+            WHERE ID = @PlayerID
+         )
+         SET @SubscriptionPlanID_GM = @SubscriptionPlanID -- PLAYER IS THE GM
+       END 
+    ELSE
+      BEGIN
+        SET @SubscriptionPlanID = 1 
+        -- THE PLAYER IS NOT THE GM -- FIND GM AND THE GM SUBSCRIPTION PLAN
+        SET @SubscriptionPlanID_GM = (
+            SELECT
+                   CASE WHEN SubscriptionLevel = 1  THEN 1 
+                        WHEN SubscriptionLevel = 2  THEN 1 
+                        WHEN SubscriptionLevel = 3  THEN 2 
+                        WHEN SubscriptionLevel > 3  THEN 3 
+                        ELSE 1
+                  END
+            FROM REF_Player
+            WHERE ID = (SELECT GM_PlayerID from REF_World WHERE ID = @WorldID)  
+         )
+      END 
+ 
+    DECLARE @ProcName NVARCHAR(255) = 'S_SYS_Admin_GAIGen_Financials';
+     
+    DECLARE @Params NVARCHAR(MAX) = N'@PlanID INT';
+    --DECLARE @ParamValues NVARCHAR(MAX) = N'@PlanID = 0' -- + CAST(@SubscriptionPlanID AS VARCHAR(1));
+    DECLARE @ParamValues NVARCHAR(MAX) = N'@PlanID = ' + CAST(@SubscriptionPlanID_GM AS VARCHAR(1));
+    DROP TABLE IF EXISTS #LocalTempTable
+
+    -- CREATE A TEMPORARY TABLE WITH THE EXACT STRUCTURE OF YOUR SP OUTPUT
+    CREATE TABLE #LocalTempTable (
+        PlanID INT,
+        PlanName NVARCHAR(255),
+        NumberOf INT,
+        MonthlyFee DECIMAL(10,2),
+        YearlyFee DECIMAL(10,2),
+        GMImagePercent DECIMAL(5,2),
+        PlayerImagePercent DECIMAL(5,2),
+        FWSteps INT,
+        FWBaseCostPerStep DECIMAL(10,5),
+        EstPlayersPerGM INT,
+        ImagesUsagePercent DECIMAL(5,2),
+        TaxPercent DECIMAL(7,5),
+        TotalImagesPerMonth_GM INT,
+        ExpectedImagesPerMonth_GM DECIMAL(10,1),
+        TotalImagesPerYear_GM INT,
+        ExpectedImagesPerYear_GM DECIMAL(10,1),
+        TotalPlayerImagesPerMonth DECIMAL(10,2),
+        TotalPlayerImagesPerYear DECIMAL(10,2),
+        TotalPlayerImagesPerPlayerPerMonth DECIMAL(10,3),
+        TotalPlayerImagesPerPlayerPerYear DECIMAL(10,3),
+        GMImagesRemainingWithPlayerUsePerMonth DECIMAL(10,2),
+        GMImagesRemainingWithPlayerUsePerYear DECIMAL(10,2),
+        TotalNumberImagesPerMonth INT,
+        TotalNumberImagesPerYear INT,
+        FWCostToElthosForImagesPerGMPerMonth DECIMAL(10,5),
+        FWCostToElthosForImagesPerGMPerYear DECIMAL(10,5),
+        FWCostToElthosForImagesPerMonth DECIMAL(10,4),
+        FWCostToElthosForImagesPerYear DECIMAL(10,4),
+        MMSubscriptionIncomeForAllGMsPerMonth DECIMAL(10,2),
+        MMSubscriptionIncomeForAllGMsPerYear DECIMAL(10,2),
+        GrossProfitBeforeTax_PerMonth DECIMAL(10,4),
+        GrossProfitBeforeTax_PerYear DECIMAL(10,4),
+        ProfitAfterTax_PerMonth DECIMAL(10,2),
+        ProfitAfterTax_PerYear DECIMAL(10,2)
+    );
+    
+	-- EXECUTE THE STORED PROCEDURE AND INSERT RESULTS INTO THE TEMP TABLE
+    DECLARE @SQL NVARCHAR(MAX);
+    SET @SQL = N'
+    INSERT INTO #LocalTempTable
+    EXEC ' + QUOTENAME(@ProcName) + ' ' + @ParamValues;
+    
+    EXEC sp_executesql @SQL;
+    
+    DECLARE @GMMonthlyImageLimit INT
+    DECLARE @PlayerMonthlyImageLimit DECIMAL(10,2)
+    DECLARE @GMPlayerCount INT
+    DECLARE @WeeklyPlayerAllowance INT
+    DECLARE @CurrentWeekNumber INT
+
+    -- GET THE NUMBER OF PLAYERS FOR THIS GM
+    SELECT @GMPlayerCount = COUNT(DISTINCT PlayerID)
+    FROM Elthos_ODS_95372.dbo.XRF_World_Player
+    WHERE WorldID IN 
+      (
+       SELECT ID FROM Elthos_ODS_95372.dbo.REF_World WHERE GM_PlayerID = 
+         (
+           SELECT GM_PlayerID FROM Elthos_ODS_95372.dbo.REF_World WHERE ID = @WorldID
+         )
+      );
+
+    -- IF THE PLAYER IS THE GM
+    IF @IsWorldGM = 1 
+    BEGIN
+        SET @GMMonthlyImageLimit = (
+            SELECT FLOOR(LTT.ExpectedImagesPerMonth_GM) 
+            FROM #LocalTempTable LTT 
+            WHERE PlanID = @SubscriptionPlanID_GM 
+        )
+        SET @PlayerMonthlyImageLimit = @GMMonthlyImageLimit  -- For consistency
+    END
+    ELSE
+    BEGIN
+        -- CALCULATE THE TOTAL PLAYER POOL
+        SET @PlayerMonthlyImageLimit = (
+            SELECT LTT.TotalPlayerImagesPerMonth 
+            FROM #LocalTempTable LTT 
+            WHERE PlanID = @SubscriptionPlanID_GM 
+        )
+
+        -- ADJUST @PlayerMonthlyImageLimit IF IT'S LESS THAN THE NUMBER OF PLAYERS
+        IF @PlayerMonthlyImageLimit < @GMPlayerCount
+            SET @PlayerMonthlyImageLimit = @GMPlayerCount
+
+        -- CALCULATE MONTHLY ALLOWANCE PER PLAYER
+        DECLARE @MonthlyPlayerAllowance DECIMAL(10,2) = @PlayerMonthlyImageLimit / @GMPlayerCount
+
+        -- CALCULATE WEEKLY ALLOWANCE
+        SET @WeeklyPlayerAllowance = CEILING(@MonthlyPlayerAllowance / 4)
+
+        -- ENSURE AT LEAST 1 IMAGE PER WEEK
+        IF @WeeklyPlayerAllowance < 1
+            SET @WeeklyPlayerAllowance = 1
+
+        -- GET CURRENT WEEK NUMBER (1-4)
+        SET @CurrentWeekNumber = DATEPART(WEEK, GETDATE()) % 4 + 1
+
+        SET @GMMonthlyImageLimit = (  -- Set this for completeness
+            SELECT FLOOR(LTT.ExpectedImagesPerMonth_GM) 
+            FROM #LocalTempTable LTT 
+            WHERE PlanID = @SubscriptionPlanID_GM 
+        )
+    END
+
+    -- UPDATE THE INCLUDED IMAGES IN THE PLAN TABLE  
+    UPDATE XRF_SubscriptionPlanDetails   
+    SET IncludedImages = FLOOR(LTT.ExpectedImagesPerMonth_GM)
+    FROM XRF_SubscriptionPlanDetails SPD
+    INNER JOIN #LocalTempTable LTT ON SPD.SubscriptionPlanID = LTT.PlanID
+
+	-- RUN FINAL RESULTS QUERY
+    SELECT 
+        Base.WorldID                                                                       AS 'WorldID',
+        ISNULL(W.Name, 'N/A')                                                              AS 'WorldName',
+        Base.PlayerID                                                                      AS 'PlayerID',
+        ISNULL(P.Name, 'N/A')                                                              AS 'PlayerName',
+        W.GM_PlayerID                                                                      AS 'GM_PlayerID',
+        (SELECT ISNULL(Name,'N/A') from REF_Player WHERE ID = W.GM_PlayerID)               AS 'GM_PlayerName',
+		(SELECT ISNULL(GAI_GMPlayerImgPercent,0) from REF_Player WHERE ID = W.GM_PlayerID) AS 'GAI_GMPlayerImgPercent',
+        @GMPlayerCount                                                                     AS 'TotalPlayersOfGM',
+        ISNULL(WorldUsage.GenImagesCount, 0)                                               AS 'WorldPlayerGenImagesCount',
+        CASE 
+            WHEN @IsWorldGM = 1 THEN @GMMonthlyImageLimit
+            ELSE @PlayerMonthlyImageLimit
+        END                                                                                AS 'MonthlyImageLimit',
+        CASE WHEN @IsWorldGM = 0 THEN @CurrentWeekNumber ELSE NULL END                     AS 'CurrentWeekNumber',
+        @PlayerMonthlyImageLimit                                                           AS 'AdjustedMaxPlayerPoolImageCount',
+        CASE WHEN @IsWorldGM = 0 THEN @WeeklyPlayerAllowance ELSE NULL END                 AS 'WeeklyPlayerAllowance',
+        ISNULL(PlayerUsage.PlayerImagesCountThisMonth, 0)                                  AS 'PlayerImagesCountThisMonth',
+        ISNULL(PlayerUsage.PlayerImagesCountThisWeek, 0)                                   AS 'PlayerImagesCountThisWeek',
+        CASE 
+            WHEN @IsWorldGM = 1 THEN @GMMonthlyImageLimit - ISNULL(PlayerUsage.PlayerImagesCountThisMonth, 0)
+            ELSE
+                CASE 
+                    WHEN ISNULL(PoolUsage.TotalPoolUsageThisMonth, 0) >= @PlayerMonthlyImageLimit THEN 0
+                    WHEN ISNULL(PlayerUsage.PlayerImagesCountThisWeek, 0) >= @WeeklyPlayerAllowance THEN 0
+                    ELSE @WeeklyPlayerAllowance - ISNULL(PlayerUsage.PlayerImagesCountThisWeek, 0)
+                END
+        END                                                                                AS 'PlayerRemainingImageCount'
+    FROM (
+        SELECT @WorldID AS WorldID, @PlayerID AS PlayerID
+    ) AS Base
+    LEFT JOIN Elthos_ODS_95372.dbo.REF_World W ON W.ID = Base.WorldID
+    LEFT JOIN Elthos_ODS_95372.dbo.REF_Player P ON P.ID = Base.PlayerID
+    LEFT JOIN (
+        SELECT 
+            WorldID, 
+            PlayerID, 
+            COUNT(ImageCount) AS 'GenImagesCount'
+        FROM XRF_GAI_Player_Usage
+        WHERE WorldID = @WorldID AND PlayerID = @PlayerID
+        GROUP BY WorldID, PlayerID
+    ) WorldUsage ON WorldUsage.WorldID = Base.WorldID AND WorldUsage.PlayerID = Base.PlayerID
+    LEFT JOIN (
+        SELECT 
+            PlayerID,
+            SUM(CASE WHEN DATEPART(MONTH, CreateDate) = DATEPART(MONTH, GETDATE()) THEN ImageCount ELSE 0 END) AS PlayerImagesCountThisMonth,
+            SUM(CASE WHEN DATEPART(WEEK, CreateDate) = DATEPART(WEEK, GETDATE()) THEN ImageCount ELSE 0 END) AS PlayerImagesCountThisWeek
+        FROM XRF_GAI_Player_Usage
+        WHERE PlayerID = @PlayerID
+        GROUP BY PlayerID
+    ) PlayerUsage ON Base.PlayerID = PlayerUsage.PlayerID
+    LEFT JOIN (
+        SELECT 
+            W.GM_PlayerID,
+            SUM(CASE WHEN DATEPART(MONTH, U.CreateDate) = DATEPART(MONTH, GETDATE()) THEN U.ImageCount ELSE 0 END) AS TotalPoolUsageThisMonth
+        FROM XRF_GAI_Player_Usage U
+        INNER JOIN Elthos_ODS_95372.dbo.REF_World W ON U.WorldID = W.ID
+        GROUP BY W.GM_PlayerID
+    ) PoolUsage ON W.GM_PlayerID = PoolUsage.GM_PlayerID;
+END;
