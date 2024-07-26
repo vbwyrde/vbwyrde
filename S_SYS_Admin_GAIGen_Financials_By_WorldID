@@ -1,5 +1,4 @@
- 
-CREATE PROCEDURE [dbo].[S_SYS_Admin_GAIGen_Financials_By_WorldID]
+ALTER PROCEDURE [dbo].[S_SYS_Admin_GAIGen_Financials_By_WorldID]
   @WorldID int 
 
 AS 
@@ -8,7 +7,7 @@ AS
 ====================================================================================
 USAGE:
 
-  EXEC S_SYS_Admin_GAIGen_Financials_By_WorldID 3362
+  EXEC S_SYS_Admin_GAIGen_Financials_By_WorldID 3363
 
 ====================================================================================
 */
@@ -37,7 +36,23 @@ JOIN XRF_SubscriptionPlanDetails spd ON sp.ID = spd.SubscriptionPlanID
 ----------------------------------------------------------------------------------------------------
 
 DECLARE @GM_PlayerID int 
+DECLARE @GAI_GMPlayerImgPercent float
+DECLARE @SubscriptionPlanID_GM int
+
 SET @GM_PlayerID = (SELECT w.GM_PlayerID from REF_World W WHERE ID = @WorldID)
+SET @GAI_GMPlayerImgPercent = (SELECT GAI_GMPlayerImgPercent FROM REF_Player WHERE ID = @GM_PlayerID)
+ 
+SET @SubscriptionPlanID_GM = (
+    SELECT
+           CASE WHEN SubscriptionLevel = 1  THEN 1 
+                WHEN SubscriptionLevel = 2  THEN 1 
+                WHEN SubscriptionLevel = 3  THEN 2 
+                WHEN SubscriptionLevel > 3  THEN 3 
+                ELSE 1
+          END
+    FROM REF_Player
+    WHERE ID = (SELECT GM_PlayerID from REF_World WHERE ID = @WorldID)  
+	)
 
 SELECT 
     pd.ID AS PlanID 
@@ -84,6 +99,9 @@ WHERE gc_steps.[Name] = 'Quality Steps'
 SELECT 
     PlanID
   , PlanName
+  , (SELECT [Name] FROM REF_World WHERE ID = @WorldID)                                                  AS 'WorldName'
+  , (SELECT GM_PlayerID FROM REF_World WHERE ID = @WorldID)                                             AS 'GM_PlayerID'
+  , (SELECT [Name] FROM REF_Player WHERE ID = (SELECT GM_PlayerID FROM REF_World WHERE ID = @WorldID))  AS 'GM_Name'
   , NumberOf
   , MonthlyFee
   , YearlyFee
@@ -122,13 +140,8 @@ SELECT
    -(((NumberOf * YearlyFee) - (FWBaseCostPerStep * FWSteps * TotalImagesPerYear_GM * GMImagePercent * NumberOf))   * TaxPercent) as decimal(10,2))  AS ProfitAfterTax_PerYear
 INTO #FinalCalculations
 FROM #Calculations
-
-
-
-If @PlanID = 0 
-  SELECT * FROM #FinalCalculations
-Else
-  SELECT * FROM #FinalCalculations
-  WHERE PlanID = @PlanID
+  
+SELECT * FROM #FinalCalculations
+  WHERE PlanID = @SubscriptionPlanID_GM
 
    
