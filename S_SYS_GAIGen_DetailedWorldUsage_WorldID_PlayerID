@@ -7,7 +7,7 @@ AS
 =============================================================================
 USAGE
   
-  EXEC S_SYS_GAIGen_DetailedWorldUsage_WorldID_PlayerID 3362, 1
+  EXEC S_SYS_GAIGen_DetailedWorldUsage_WorldID_PlayerID 182, 185
 
 =============================================================================
 SUPPORT QUERIES:
@@ -23,7 +23,7 @@ SUPPORT QUERIES:
   INNER JOIN 
       REF_World w ON p.ID = w.GM_PlayerID
   WHERE 
-      p.SubscriptionLevel = 4
+      p.SubscriptionLevel > 0 
 
   SELECT * FROM REF_Player WHERE Name LIKE '%Blades%'
  
@@ -107,17 +107,20 @@ BEGIN
          )
       END 
  
-    DECLARE @ProcName NVARCHAR(255) = 'S_SYS_Admin_GAIGen_Financials';
+    DECLARE @ProcName NVARCHAR(255) = 'S_SYS_Admin_GAIGen_Financials_By_WorldID';
      
-    DECLARE @Params NVARCHAR(MAX) = N'@PlanID INT';
+    DECLARE @Params NVARCHAR(MAX) = N'@WorldID INT';
     --DECLARE @ParamValues NVARCHAR(MAX) = N'@PlanID = 0' -- + CAST(@SubscriptionPlanID AS VARCHAR(1));
-    DECLARE @ParamValues NVARCHAR(MAX) = N'@PlanID = ' + CAST(@SubscriptionPlanID_GM AS VARCHAR(1));
+    DECLARE @ParamValues NVARCHAR(MAX) = N'@WorldID = ' + CAST(@WorldID AS VARCHAR(12));
     DROP TABLE IF EXISTS #LocalTempTable
 
     -- CREATE A TEMPORARY TABLE WITH THE EXACT STRUCTURE OF YOUR SP OUTPUT
     CREATE TABLE #LocalTempTable (
         PlanID INT,
         PlanName NVARCHAR(255),
+        WorldName VARCHAR(200),
+        GM_PlayerID	BIGINT, 
+        GM_Name VARCHAR(200),
         NumberOf INT,
         MonthlyFee DECIMAL(10,2),
         YearlyFee DECIMAL(10,2),
@@ -149,7 +152,8 @@ BEGIN
         GrossProfitBeforeTax_PerMonth DECIMAL(10,4),
         GrossProfitBeforeTax_PerYear DECIMAL(10,4),
         ProfitAfterTax_PerMonth DECIMAL(10,2),
-        ProfitAfterTax_PerYear DECIMAL(10,2)
+        ProfitAfterTax_PerYear DECIMAL(10,2),
+
     );
     
 	-- EXECUTE THE STORED PROCEDURE AND INSERT RESULTS INTO THE TEMP TABLE
@@ -275,8 +279,9 @@ BEGIN
             SUM(CASE WHEN DATEPART(MONTH, CreateDate) = DATEPART(MONTH, GETDATE()) THEN ImageCount ELSE 0 END) AS PlayerImagesCountThisMonth,
             SUM(CASE WHEN DATEPART(WEEK, CreateDate) = DATEPART(WEEK, GETDATE()) THEN ImageCount ELSE 0 END) AS PlayerImagesCountThisWeek
         FROM XRF_GAI_Player_Usage
-        WHERE PlayerID = @PlayerID
-        GROUP BY PlayerID
+        WHERE PlayerID = @PlayerID   -- NOTE THIS IS INSUFFICIENT: WE NEED TO GET THE PLAYER IMAGE COUNT FOR THE GIVEN GM'S WORLDS
+          AND WorldID IN (SELECT ID FROM REF_World WHERE GM_PlayerID = (SELECT DISTINCT GM_PlayerID from REF_World WHERE ID = @WorldID))
+		GROUP BY PlayerID
     ) PlayerUsage ON Base.PlayerID = PlayerUsage.PlayerID
     LEFT JOIN (
         SELECT 
